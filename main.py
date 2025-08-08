@@ -1,41 +1,25 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import JSONResponse
 import pandas as pd
-import os
+from io import BytesIO
 from datetime import datetime
 
 app = FastAPI(title="Meesho Seller Analytics API")
 
-ASSETS_DIR = "assets"
-os.makedirs(ASSETS_DIR, exist_ok=True)
+@app.get("/")
+def root():
+    return {"message": "FastAPI on Railway is live!"}
 
-@app.post("/upload-order-file/")
-async def upload_file(file: UploadFile = File(...)):
+@app.post("/analyze-order-file/")
+async def analyze_uploaded_file(file: UploadFile = File(...)):
     if not file.filename.endswith('.xlsx'):
         raise HTTPException(status_code=400, detail="Only .xlsx files are supported.")
 
-    file_location = os.path.join(ASSETS_DIR, file.filename)
-    with open(file_location, "wb") as f:
-        content = await file.read()
-        f.write(content)
-
-    return {"filename": file.filename, "message": "File uploaded successfully."}
-
-@app.get("/order-payments/summary")
-def get_order_summary():
     try:
-        file_paths = [
-            os.path.join(ASSETS_DIR, f)
-            for f in os.listdir(ASSETS_DIR)
-            if f.endswith(".xlsx")
-        ]
+        content = await file.read()
+        excel_data = BytesIO(content)
 
-        combined_df = pd.DataFrame()
-        for path in file_paths:
-            df = pd.read_excel(path, sheet_name="Order Payments", header=1)
-            combined_df = pd.concat([combined_df, df], ignore_index=True)
-
-        df = combined_df.where(pd.notnull(combined_df), None)
+        df = pd.read_excel(excel_data, sheet_name="Order Payments", header=1)
+        df = df.where(pd.notnull(df), None)
         df.drop_duplicates(subset=["Sub Order No"], inplace=True)
 
         df['Payment Date'] = pd.to_datetime(df['Payment Date'], errors='coerce')
@@ -60,16 +44,12 @@ def get_order_summary():
 
         return_statuses = ['RTO', 'Return', 'Shipped']
         return_df = df[df['Live Order Status'].isin(return_statuses)]
-        return_count = len(return_df)
 
         product_return_amount = return_df[return_col].sum()
         customer_return_df = df[df['Live Order Status'].isin(['Return', 'Shipped'])]
         customer_shipping_charge = customer_return_df[shipping_col].sum()
-        total_return_amount = product_return_amount + customer_shipping_charge
 
         customer_return_count = len(customer_return_df)
-        customer_return_amount = customer_return_df[return_col].sum() + customer_shipping_charge
-
         rto_df = df[df['Live Order Status'] == 'RTO']
         rto_count = len(rto_df)
         rto_amount = rto_df[return_col].sum()
@@ -86,41 +66,36 @@ def get_order_summary():
             product_settlement = group[settlement_col].sum()
 
             product_return_df = group[group['Live Order Status'].isin(return_statuses)]
-            product_return_count = len(product_return_df)
             product_return_amount = product_return_df[return_col].sum()
 
             product_customer_df = group[group['Live Order Status'].isin(['Return', 'Shipped'])]
             product_shipping_charge = product_customer_df[shipping_col].sum()
 
             product_claims_df = group[group[claims_col] > 0]
-            product_claims_count = len(product_claims_df)
             product_claims_amount = product_claims_df[claims_col].sum()
 
             productwise.append({
                 "product_name": name,
                 "total_orders": product_total_orders,
                 "total_settlement_amount": round(product_settlement, 2),
-                "return_count": product_return_count,
+                "return_count": len(product_return_df),
                 "return_amount": round(product_return_amount + product_shipping_charge, 2),
                 "customer_shipping_charge": round(product_shipping_charge, 2),
-                "claims_count": product_claims_count,
+                "claims_count": len(product_claims_df),
                 "claims_amount": round(product_claims_amount, 2)
             })
 
-        # External constants from PDF
-        cost_of_goods_sold = 2940770.00
-        gst_payable = 55482.10
-        tds = -4315.04
-        other_charges = -1198.40
-
-        # Correct logic based on other software
-        shipping_cost = -(customer_shipping_charge + rto_amount)
         sales_excl_gst = total_settlement_amount
-        sales_less_expenses = sales_excl_gst + shipping_cost + other_charges + (-total_ads_cost)
-        gross_profit = sales_less_expenses - cost_of_goods_sold
+        commission = 0.0
+        shipping_cost = -rto_amount - customer_shipping_charge
+        other_charges = 0.0
+        sales_less_expenses = sales_excl_gst + shipping_cost + other_charges + total_ads_cost
+        gross_profit = sales_less_expenses
         gross_profit_percent = (gross_profit / sales_excl_gst * 100) if sales_excl_gst else 0
 
-        net_amount_received = sales_less_expenses - gst_payable + claims_amount + tds
+        net_amount_received = sales_excl_gst + claims_amount
+        gst_payable = 0.0
+        tds = 0.0
         avg_payment_cycle_days = 15.05
 
         quantity_analysis = {
@@ -144,13 +119,13 @@ def get_order_summary():
         return {
             "calculation_of_gross_profit": {
                 "sales_excl_gst": round(sales_excl_gst, 2),
-                "commission": 0.0,
+                "commission": round(commission, 2),
                 "shipping": round(shipping_cost, 2),
                 "other_charges": round(other_charges, 2),
-                "ads_cost": round(-total_ads_cost, 2),
+                "ads_cost": round(total_ads_cost, 2),
                 "sales_less_expenses": round(sales_less_expenses, 2),
                 "non_refundable_gst": 0.0,
-                "cost_of_goods_sold": round(cost_of_goods_sold, 2),
+                "cost_of_goods_sold": 0.0,
                 "gross_profit": round(gross_profit, 2),
                 "gross_profit_percent": round(gross_profit_percent, 2)
             },
@@ -170,4 +145,4 @@ def get_order_summary():
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing summary: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
