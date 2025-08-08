@@ -2,6 +2,8 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 import pandas as pd
 from io import BytesIO
 from datetime import datetime
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 
 app = FastAPI(title="Meesho Seller Analytics API")
 
