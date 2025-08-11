@@ -9,7 +9,7 @@ app = FastAPI(title="Meesho Seller Analytics API")
 
 @app.get("/")
 def root():
-    return {"message": "FastAPI on Railway is live!"}
+    return {"message": "Welcome to Meesho Analytics API"}
 
 @app.post("/analyze-order-file/")
 async def analyze_uploaded_file(file: UploadFile = File(...)):
